@@ -1,52 +1,55 @@
 import { useState, useEffect, useRef } from 'react'
-import { BroadcastChannel } from 'broadcast-channel'
-import { useKV } from '@github/spark/hooks'
+import { ChannelStore } from '@channel-state/core'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { ArrowsClockwise, Monitor } from '@phosphor-icons/react'
 import { motion, AnimatePresence } from 'framer-motion'
 
+const channelStore = new ChannelStore<string>({
+  name: 'notepad-text',
+  initial: '',
+  persist: true,
+})
+
 function App() {
-  const [text, setText] = useKV('notepad-text', '')
+  const [text, setText] = useState('')
   const [isSyncing, setIsSyncing] = useState(false)
-  const channelRef = useRef<BroadcastChannel<string> | null>(null)
+  const [isReady, setIsReady] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const isLocalChange = useRef(false)
 
   useEffect(() => {
-    const channel = new BroadcastChannel<string>('notepad-sync')
-    channelRef.current = channel
-
-    channel.onmessage = (msg) => {
-      if (msg !== text) {
-        const currentCursorPos = textareaRef.current?.selectionStart || 0
-        setText(msg)
-        setIsSyncing(true)
-        
-        setTimeout(() => {
-          if (textareaRef.current && document.activeElement !== textareaRef.current) {
-            textareaRef.current.setSelectionRange(currentCursorPos, currentCursorPos)
-          }
-        }, 0)
-        
-        setTimeout(() => setIsSyncing(false), 500)
+    const unsubscribeStatus = channelStore.subscribeStatus((status) => {
+      if (status === 'ready') {
+        setIsReady(true)
+        setText(channelStore.get())
       }
-    }
+    })
+
+    const unsubscribe = channelStore.subscribe((newText) => {
+      setText(newText)
+      setIsSyncing(true)
+      
+      setTimeout(() => {
+        const currentCursorPos = textareaRef.current?.selectionStart || 0
+        if (textareaRef.current && document.activeElement !== textareaRef.current) {
+          textareaRef.current.setSelectionRange(currentCursorPos, currentCursorPos)
+        }
+      }, 0)
+      
+      setTimeout(() => setIsSyncing(false), 500)
+    })
 
     return () => {
-      channel.close()
+      unsubscribeStatus()
+      unsubscribe()
     }
-  }, [text, setText])
+  }, [])
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newText = e.target.value
-    isLocalChange.current = true
     setText(newText)
-    
-    if (channelRef.current) {
-      channelRef.current.postMessage(newText)
-    }
+    channelStore.set(newText)
   }
 
   return (
@@ -57,7 +60,7 @@ function App() {
             <div>
               <h1 className="text-3xl font-semibold text-foreground flex items-center gap-3">
                 <Monitor className="text-primary" size={32} weight="duotone" />
-                Sync Notepad
+                Channel State Notepad
               </h1>
               <p className="text-muted-foreground mt-1">
                 Type here and watch it sync across tabs in real-time
